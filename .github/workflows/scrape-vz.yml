@@ -1,38 +1,33 @@
-name: VZ Premium Scraper
-on:
-  repository_dispatch:
-    types: [scrape-request]
+- name: Scrape VZ Article
+  run: |
+    node -e "
+    const { scrapeVZArticle } = require('./scraper.js');
+    const payload = ${{ toJson(github.event.client_payload) }};
     
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-      - run: npm install
-      - name: Scrape VZ Article
-        run: |
-          node -e "
-          const { scrapeVZArticle } = require('./scraper.js');
-          const url = '${{ github.event.client_payload.url }}';
-          const webhook = '${{ github.event.client_payload.webhook }}';
-          
-          scrapeVZArticle(url, '${{ secrets.VZ_EMAIL }}', '${{ secrets.VZ_PASSWORD }}')
-            .then(text => {
-              // Send back to n8n webhook
-              fetch(webhook, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, text, success: true })
-              });
-            })
-            .catch(err => {
-              fetch(webhook, {
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, error: err.message, success: false })
-              });
-            });
-          "
+    scrapeVZArticle(payload.url, '${{ secrets.VZ_EMAIL }}', '${{ secrets.VZ_PASSWORD }}')
+      .then(text => {
+        fetch(payload.webhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            url: payload.url,
+            title: payload.title,
+            pubDate: payload.pubDate,
+            trending_topics: payload.trending_topics,
+            text: text,
+            success: true 
+          })
+        });
+      })
+      .catch(err => {
+        fetch(payload.webhook, {
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            url: payload.url,
+            error: err.message,
+            success: false 
+          })
+        });
+      });
+    "
