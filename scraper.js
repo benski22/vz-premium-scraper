@@ -16,7 +16,7 @@ async function scrapeVZArticle(url, email, password) {
     await page.waitForNavigation();
     
     await page.type('input[type="password"]', password);
-    await page.click('button[type="submit"]');
+    await page.click('button[type="submit"]');  
     await page.waitForNavigation();
     
     // Scrape article
@@ -34,5 +34,4 @@ async function scrapeVZArticle(url, email, password) {
   }
 }
 
-// Export for GitHub Actions
 module.exports = { scrapeVZArticle };
