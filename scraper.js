@@ -223,8 +223,23 @@ async function scrapeVZArticle(url, email, password) {
     
     console.log(`🎉 Article successfully extracted! Length: ${articleText.length} characters`);
     
-    // Return first 8000 characters to avoid webhook size limits
-    return articleText.substring(0, 8000);
+    // POST content to n8n webhook
+  const webhookUrl = process.env.WEBHOOK_URL;
+  const title = process.env.ARTICLE_TITLE;
+  const pubDate = process.env.ARTICLE_PUBDATE;
+
+  await axios.post(webhookUrl, {
+    url,
+    title,
+    pubDate,
+    text: articleText.substring(0, 8000)
+});
+
+  console.log('✅ Content successfully sent to n8n webhook.');
+
+  return 'Scraping and webhook POST completed.';
+
+
     
   } catch (error) {
     console.error('❌ Scraping failed:', error.message);
@@ -235,3 +250,4 @@ async function scrapeVZArticle(url, email, password) {
 }
 
 module.exports = { scrapeVZArticle };
+
