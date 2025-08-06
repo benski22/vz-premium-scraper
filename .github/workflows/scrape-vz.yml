@@ -9,8 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       URL: ${{ github.event.client_payload.url }}
-      TITLE: ${{ github.event.client_payload.title }}
-      PUBDATE: ${{ github.event.client_payload.pubDate }}
+      TITLE: ${{ github.event.client_payload.article_title }}
+      PUBDATE: ${{ github.event.client_payload.article_pubDate }}
       TRENDING_TOPICS: ${{ github.event.client_payload.trending_topics }}
       WEBHOOK_URL: ${{ github.event.client_payload.webhook }}
     steps:
