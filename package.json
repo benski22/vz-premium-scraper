@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "dependencies": {
     "puppeteer": "^22.8.2",
-    "axios": "^1.0.0"
+    "axios": "^1.6.0"
   }
 }
+
