@@ -1,5 +1,8 @@
 const puppeteer = require('puppeteer');
 
+// Helper function for delays - replaces page.waitForTimeout
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function scrapeVZArticle(url, email, password) {
   const browser = await puppeteer.launch({ 
     headless: "new",
@@ -26,7 +29,7 @@ async function scrapeVZArticle(url, email, password) {
       timeout: 60000 
     });
     
-    await page.waitForTimeout(3000);
+    await delay(3000); // Fixed: was page.waitForTimeout(3000)
     console.log('Login page loaded');
     
     // CORRECTED: VŽ uses type="text" with id="email", not type="email"
@@ -101,7 +104,7 @@ async function scrapeVZArticle(url, email, password) {
       console.log('Could not submit email form, trying without navigation wait...');
       try {
         await page.click('button[type="submit"]');
-        await page.waitForTimeout(3000);
+        await delay(3000); // Fixed: was page.waitForTimeout(3000)
         submitted = true;
       } catch (e) {
         console.log('Submit completely failed');
@@ -111,7 +114,7 @@ async function scrapeVZArticle(url, email, password) {
     // Password step (if we got to it)
     if (submitted) {
       console.log('Looking for password input...');
-      await page.waitForTimeout(2000);
+      await delay(2000); // Fixed: was page.waitForTimeout(2000)
       
       const passwordSelectors = [
         'input[type="password"]',
@@ -140,12 +143,29 @@ async function scrapeVZArticle(url, email, password) {
     
     // Now access the article
     console.log(`Accessing article: ${url}`);
-    await page.goto(url, { 
-      waitUntil: 'domcontentloaded',
-      timeout: 60000 
-    });
     
-    await page.waitForTimeout(5000);
+    let articleAccessSuccess = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded',
+          timeout: 60000 
+        });
+        articleAccessSuccess = true;
+        break;
+      } catch (error) {
+        console.log(`Article access attempt ${attempt} failed:`, error.message);
+        if (attempt < 3) {
+          await delay(5000); // Fixed: was page.waitForTimeout(5000)
+        }
+      }
+    }
+    
+    if (!articleAccessSuccess) {
+      throw new Error('Could not access article page');
+    }
+    
+    await delay(5000); // Fixed: was page.waitForTimeout(5000)
     
     // Extract content with multiple selectors
     const contentSelectors = [
