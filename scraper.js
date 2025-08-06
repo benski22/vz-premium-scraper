@@ -1,3 +1,10 @@
+console.log('ENV:', {
+  url: process.env.URL,
+  title: process.env.ARTICLE_TITLE,
+  pubDate: process.env.ARTICLE_PUBDATE,
+  webhook: process.env.WEBHOOK_URL
+});
+
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 
@@ -108,3 +115,4 @@ async function scrapeVZArticle(url, email, password) {
     process.exit(1);
   }
 })();
+
