@@ -1,7 +1,7 @@
 console.log('ENV:', {
   url: process.env.URL,
-  title: process.env.ARTICLE_TITLE,
-  pubDate: process.env.ARTICLE_PUBDATE,
+  title: process.env.TITLE,
+  pubDate: process.env.PUBDATE,
   webhook: process.env.WEBHOOK_URL
 });
 
@@ -88,8 +88,8 @@ async function scrapeVZArticle(url, email, password) {
 
     await axios.post(process.env.WEBHOOK_URL, {
       url: process.env.URL,
-      title: process.env.ARTICLE_TITLE,
-      pubDate: process.env.ARTICLE_PUBDATE,
+      title: process.env.TITLE,
+      pubDate: process.env.PUBDATE,
       text: articleText.substring(0, 8000),
       trending_topics: process.env.TRENDING_TOPICS || ''
     });
@@ -115,4 +115,5 @@ async function scrapeVZArticle(url, email, password) {
     process.exit(1);
   }
 })();
+
 
