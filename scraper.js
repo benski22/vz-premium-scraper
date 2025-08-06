@@ -2,148 +2,212 @@ const puppeteer = require('puppeteer');
 
 async function scrapeVZArticle(url, email, password) {
   const browser = await puppeteer.launch({ 
-    headless: "new", // Pataisyta Puppeteer warning
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    headless: "new",
+    args: [
+      '--no-sandbox', 
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage'
+    ]
   });
   
   try {
     const page = await browser.newPage();
     
-    // Login process - bandyti kelis selector'ius
-    await page.goto('https://prisijungimas.vz.lt/verslo-zinios', { waitUntil: 'networkidle0' });
+    // Set timeouts and user agent
+    page.setDefaultNavigationTimeout(60000);
+    page.setDefaultTimeout(30000);
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
-    // Palaukti, kad page įsikeltų
-    await page.waitForTimeout(2000);
+    console.log('Accessing VZ login page...');
     
-    // Pabandyti kelis email selector'ius
+    // Go to login page
+    await page.goto('https://prisijungimas.vz.lt/verslo-zinios', { 
+      waitUntil: 'domcontentloaded',
+      timeout: 60000 
+    });
+    
+    await page.waitForTimeout(3000);
+    console.log('Login page loaded');
+    
+    // CORRECTED: VŽ uses type="text" with id="email", not type="email"
     const emailSelectors = [
-      'input[type="email"]',
-      'input[name="email"]', 
-      '#email',
-      '.email-input',
-      'input[placeholder*="email"]',
-      'input[placeholder*="El. paštas"]'
+      '#email',                    // ✅ Exact match from HTML
+      'input[id="email"]',         // ✅ Alternative exact match
+      'input[type="text"][placeholder*="pašto"]', // ✅ By placeholder text
+      'input[autocomplete="vzusername"]',         // ✅ VŽ specific autocomplete
+      'input[type="text"]',        // ✅ Fallback generic
+      'input[name="email"]'        // In case they use name attr
     ];
     
-    let emailInput = null;
+    let emailFound = false;
     for (const selector of emailSelectors) {
       try {
-        emailInput = await page.$(selector);
-        if (emailInput) {
-          console.log(`Found email input with selector: ${selector}`);
-          break;
-        }
+        console.log(`Trying email selector: ${selector}`);
+        await page.waitForSelector(selector, { timeout: 5000 });
+        await page.type(selector, email, { delay: 100 }); // Add typing delay
+        console.log(`✅ Email entered successfully with: ${selector}`);
+        emailFound = true;
+        break;
       } catch (e) {
+        console.log(`❌ Email selector failed: ${selector} - ${e.message}`);
         continue;
       }
     }
     
-    if (!emailInput) {
-      throw new Error('Email input not found with any selector');
+    if (!emailFound) {
+      console.log('Taking screenshot for debugging...');
+      await page.screenshot({ path: 'email-debug.png' });
+      
+      // Log all input elements for debugging
+      const inputs = await page.$$eval('input', els => 
+        els.map(el => ({
+          id: el.id,
+          type: el.type,
+          name: el.name,
+          placeholder: el.placeholder,
+          class: el.className
+        }))
+      );
+      console.log('Available inputs:', JSON.stringify(inputs, null, 2));
+      
+      throw new Error('Email input not found after trying all selectors');
     }
     
-    await page.type(emailInput, email);
-    
-    // Submit button
+    // Submit email step
     const submitSelectors = [
       'button[type="submit"]',
-      'input[type="submit"]',
-      '.submit-btn',
-      '.login-btn',
-      'button:contains("Prisijungti")'
+      'input[type="submit"]', 
+      'button:contains("Tęsti")',
+      '.btn-primary',
+      'form button'
     ];
     
-    let submitButton = null;
+    let submitted = false;
     for (const selector of submitSelectors) {
       try {
-        submitButton = await page.$(selector);
-        if (submitButton) {
-          console.log(`Found submit button with selector: ${selector}`);
-          break;
-        }
+        console.log(`Trying submit selector: ${selector}`);
+        await page.click(selector);
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+        console.log(`✅ Email submitted with: ${selector}`);
+        submitted = true;
+        break;
       } catch (e) {
+        console.log(`❌ Submit failed: ${selector} - ${e.message}`);
         continue;
       }
     }
     
-    if (submitButton) {
-      await submitButton.click();
-      await page.waitForNavigation({ waitUntil: 'networkidle0' });
-    }
-    
-    // Password step
-    await page.waitForTimeout(2000);
-    
-    const passwordSelectors = [
-      'input[type="password"]',
-      'input[name="password"]',
-      '#password',
-      '.password-input'
-    ];
-    
-    let passwordInput = null;
-    for (const selector of passwordSelectors) {
+    if (!submitted) {
+      console.log('Could not submit email form, trying without navigation wait...');
       try {
-        passwordInput = await page.$(selector);
-        if (passwordInput) {
-          console.log(`Found password input with selector: ${selector}`);
-          break;
-        }
+        await page.click('button[type="submit"]');
+        await page.waitForTimeout(3000);
+        submitted = true;
       } catch (e) {
-        continue;
+        console.log('Submit completely failed');
       }
     }
     
-    if (passwordInput) {
-      await page.type(passwordInput, password);
+    // Password step (if we got to it)
+    if (submitted) {
+      console.log('Looking for password input...');
+      await page.waitForTimeout(2000);
       
-      // Submit password
-      const submitBtn = await page.$('button[type="submit"]') || await page.$('input[type="submit"]');
-      if (submitBtn) {
-        await submitBtn.click();
-        await page.waitForNavigation({ waitUntil: 'networkidle0' });
+      const passwordSelectors = [
+        'input[type="password"]',
+        '#password',
+        'input[name="password"]'
+      ];
+      
+      for (const selector of passwordSelectors) {
+        try {
+          console.log(`Trying password selector: ${selector}`);
+          await page.waitForSelector(selector, { timeout: 10000 });
+          await page.type(selector, password, { delay: 100 });
+          console.log(`✅ Password entered with: ${selector}`);
+          
+          // Submit password
+          await page.click('button[type="submit"]');
+          await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+          console.log('✅ Password submitted successfully');
+          break;
+        } catch (e) {
+          console.log(`❌ Password step failed: ${selector} - ${e.message}`);
+          continue;
+        }
       }
     }
     
-    // Scrape article
-    await page.goto(url, { waitUntil: 'networkidle0' });
-    await page.waitForTimeout(3000);
+    // Now access the article
+    console.log(`Accessing article: ${url}`);
+    await page.goto(url, { 
+      waitUntil: 'domcontentloaded',
+      timeout: 60000 
+    });
     
-    // Try multiple content selectors
+    await page.waitForTimeout(5000);
+    
+    // Extract content with multiple selectors
     const contentSelectors = [
       '.article-content',
       '.article-body', 
-      '.content',
-      '.article-text',
+      '.content-body',
+      'article .content',
+      '[class*="article-content"]',
       '.story-content',
-      'article',
-      '.post-content'
+      'main article'
     ];
     
     let articleText = '';
     for (const selector of contentSelectors) {
       try {
-        const content = await page.$(selector);
-        if (content) {
-          articleText = await page.evaluate(el => el.innerText, content);
-          if (articleText && articleText.length > 100) {
-            console.log(`Found content with selector: ${selector}`);
+        console.log(`Trying content selector: ${selector}`);
+        const element = await page.$(selector);
+        if (element) {
+          const text = await page.evaluate(el => el.innerText, element);
+          if (text && text.trim().length > 200) {
+            articleText = text.trim();
+            console.log(`✅ Content found with: ${selector} (${articleText.length} chars)`);
             break;
           }
         }
       } catch (e) {
+        console.log(`❌ Content selector failed: ${selector}`);
         continue;
       }
     }
     
-    if (!articleText || articleText.length < 50) {
-      throw new Error('Article content not found or too short');
+    // Fallback: extract all meaningful text
+    if (!articleText || articleText.length < 100) {
+      console.log('Trying fallback content extraction...');
+      try {
+        articleText = await page.evaluate(() => {
+          // Remove unwanted elements
+          const unwanted = document.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner');
+          unwanted.forEach(el => el.remove());
+          
+          // Try to find main content area
+          const main = document.querySelector('main') || document.querySelector('.main') || document.body;
+          return main.innerText || '';
+        });
+        console.log(`Fallback extraction: ${articleText.length} chars`);
+      } catch (e) {
+        console.log('Fallback extraction failed');
+      }
     }
     
-    return articleText;
+    if (!articleText || articleText.length < 50) {
+      await page.screenshot({ path: 'article-debug.png' });
+      throw new Error(`Article content too short or empty. Length: ${articleText.length}`);
+    }
+    
+    console.log(`🎉 Article successfully extracted! Length: ${articleText.length} characters`);
+    
+    // Return first 8000 characters to avoid webhook size limits
+    return articleText.substring(0, 8000);
     
   } catch (error) {
-    console.error('Scraping error:', error.message);
+    console.error('❌ Scraping failed:', error.message);
     throw error;
   } finally {
     await browser.close();
