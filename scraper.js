@@ -59,104 +59,93 @@ async function scrapeVZArticle(url, email, password) {
     await delay(5000);
 
     // VŽ specifinis content extraction
-    const articleText = await page.evaluate(() => {
-      let content = '';
+const articleText = await page.evaluate(() => {
+  let content = '';
   
-      // 1. Ištraukti summary
-      const summaryElement = document.querySelector('summary');
-      if (summaryElement) {
-        content += summaryElement.textContent.trim() + '\n\n';
-      }
+  // 1. Ištraukti summary
+  const summaryElement = document.querySelector('summary');
+  if (summaryElement) {
+    content += summaryElement.textContent.trim() + '\n\n';
+  }
   
-      // 2. Pašalinti nereikalingus elementus prieš analizę
-      const unwantedSelectors = [
-        '.infogram-embed',
-        '.sas',
-        '.has-ad-desktop',
-        '.rekvizitai-embed',
-        'iframe[src*="infogram"]',
-        'iframe[src*="rekvizitai"]',
-        'figure.infogram-embed',
-        'figure.rekvizitai-embed',
-        '.author-disclaimer'
-      ];
+  // 2. Pašalinti nereikalingus elementus prieš analizę
+  const unwantedSelectors = [
+    '.infogram-embed',
+    '.sas',
+    '.has-ad-desktop',
+    '.rekvizitai-embed',
+    'iframe[src*="infogram"]',
+    'iframe[src*="rekvizitai"]',
+    'figure.infogram-embed',
+    'figure.rekvizitai-embed',
+    '.author-disclaimer'
+  ];
   
-      unwantedSelectors.forEach(selector => {
-        document.querySelectorAll(selector).forEach(el => el.remove());
-      });
-  
-      // 3. Ieškoti article container'io
-      const articleContainer = document.querySelector('.article-content') || 
-                              document.querySelector('main article') || 
-                              document.querySelector('.content-body');
-  
-      if (articleContainer) {
-      // Eiti per visus child elementus ir išlaikyti struktūrą
-      Array.from(articleContainer.children).forEach(element => {
-      
-        // Antraštės (h2, h3, h4, arba strong pastraipose)
-        if (element.tagName && ['H2', 'H3', 'H4'].includes(element.tagName)) {
-          const headerText = element.textContent.trim();
-          if (headerText) {
-            content += headerText + '\n\n';
-          }
-        }
-        // Pastraipų su antraštėmis tikrinimas  
-        else if (element.classList.contains('content-paragraph')) {
-          // Praleisti italic disclaimers
-          if (element.querySelector('i')) return;
-        
-          // Tikrinti, ar tai antraštė (strong/bold tekstas)
-          const strongElement = element.querySelector('strong');
-          if (strongElement && strongElement.textContent.trim().length > 0 && 
-              element.textContent.trim() === strongElement.textContent.trim()) {
-            // Tai antraštė
-            content += strongElement.textContent.trim() + '\n\n';
-            return;
-          }
-        
-          // Įprastas paragrafas
-          let paragraphText = '';
-          Array.from(element.childNodes).forEach(node => {
-            if (node.nodeType === Node.TEXT_NODE) {
-              paragraphText += node.textContent;
-            } else if (node.nodeType === Node.ELEMENT_NODE) {
-              if (node.tagName === 'A') {
-                paragraphText += node.textContent;
-              } else if (node.tagName !== 'I') {
-                paragraphText += node.textContent;
-              }
-            }
-          });
-        
-          const cleanText = paragraphText.trim();
-          if (cleanText && cleanText.length > 10) {
-            content += cleanText + '\n\n';
-          }
-        }
-      });
-    }
-  
-    // 4. Fallback jei nepavyko
-    if (!content || content.trim().length < 100) {
-      // (palikti esamą fallback kodą)
-      const fallbackSelectors = ['.article-content', '.article-body', '.content-body', 'article .content', 'main article'];
-    
-      for (const selector of fallbackSelectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          element.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed').forEach(el => el.remove());
-          const text = element.innerText || element.textContent || '';
-          if (text.trim().length > 200) {
-            content = text.trim();
-            break;
-          }
-        }
-      }
-    }
-  
-    return content.trim();
+  unwantedSelectors.forEach(selector => {
+    document.querySelectorAll(selector).forEach(el => el.remove());
   });
+  
+  // 3. Ištraukti content-paragraph tekstus (ORIGINALUS VEIKIANTIS KODAS)
+  const contentParagraphs = document.querySelectorAll('.content-paragraph');
+  
+  contentParagraphs.forEach(paragraph => {
+    // Praleisti, jei yra italic disclaimer (tekste <i>)
+    if (paragraph.querySelector('i')) return;
+    
+    // NAUJA LOGIKA: Tikrinti ar tai antraštė
+    const strongElement = paragraph.querySelector('strong');
+    if (strongElement && 
+        paragraph.textContent.trim() === strongElement.textContent.trim() &&
+        strongElement.textContent.trim().length > 5) {
+      // Tai antraštė - pridėti be papildomų simbolių
+      content += strongElement.textContent.trim() + '\n\n';
+      return;
+    }
+    
+    // ORIGINALUS KODAS: Įprastas paragrafas
+    let paragraphText = '';
+    
+    Array.from(paragraph.childNodes).forEach(node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        // Paprastas tekstas
+        paragraphText += node.textContent;
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.tagName === 'A') {
+          // Link tekstas be HTML tagų
+          paragraphText += node.textContent;
+        } else if (node.tagName !== 'I') {
+          // Kiti elementai, bet ne italic
+          paragraphText += node.textContent;
+        }
+      }
+    });
+    
+    // Pridėti paragrafo tekstą, jei jis neprastas
+    const cleanText = paragraphText.trim();
+    if (cleanText && cleanText.length > 10) {
+      content += cleanText + '\n\n';
+    }
+  });
+  
+  // 4. Fallback (ORIGINALUS KODAS)
+  if (!content || content.trim().length < 100) {
+    const fallbackSelectors = ['.article-content', '.article-body', '.content-body', 'article .content', 'main article'];
+    
+    for (const selector of fallbackSelectors) {
+      const element = document.querySelector(selector);
+      if (element) {
+        element.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed').forEach(el => el.remove());
+        const text = element.innerText || element.textContent || '';
+        if (text.trim().length > 200) {
+          content = text.trim();
+          break;
+        }
+      }
+    }
+  }
+  
+  return content.trim();
+});
 
     // Fallback jei vis dar nėra turinio
     let finalArticleText = articleText;
@@ -204,4 +193,5 @@ async function scrapeVZArticle(url, email, password) {
     process.exit(1);
   }
 })();
+
 
