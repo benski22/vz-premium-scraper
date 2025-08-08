@@ -2,15 +2,13 @@ name: VZ Premium Scraper
 
 on:
   repository_dispatch:
-    types: [scrape-request]
+    types: [scrape-request-batch] # Naujas event type
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     env:
-      URL: ${{ github.event.client_payload.url }}
-      TITLE: ${{ github.event.client_payload.title }}
-      PUBDATE: ${{ github.event.client_payload.pubDate }}
+      ARTICLES: ${{ toJson(github.event.client_payload.articles) }} # Array
       TRENDING_TOPICS: ${{ github.event.client_payload.trending_topics }}
       WEBHOOK_URL: ${{ github.event.client_payload.webhook }}
     steps:
@@ -22,8 +20,8 @@ jobs:
 
       - run: npm install
 
-      - name: Scrape VZ Article
-        run: node scraper.js
+      - name: Scrape VZ Articles Batch
+        run: node batch-scraper.js # Naujas failas
         env:
           VZ_EMAIL: ${{ secrets.VZ_EMAIL }}
           VZ_PASSWORD: ${{ secrets.VZ_PASSWORD }}
