@@ -1,7 +1,6 @@
-console.log('ENV:', {
-  url: process.env.URL,
-  title: process.env.TITLE,
-  pubDate: process.env.PUBDATE,
+console.log('BATCH ENV:', {
+  articlesCount: JSON.parse(process.env.ARTICLES || '[]').length,
+  trendingTopics: process.env.TRENDING_TOPICS ? 'Present' : 'Missing',
   webhook: process.env.WEBHOOK_URL
 });
 
@@ -9,6 +8,64 @@ const puppeteer = require('puppeteer');
 const axios = require('axios');
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Detect domain type from URL
+function getDomainType(url) {
+  if (url.includes('manopinigai.vz.lt')) {
+    return 'manopinigai';
+  }
+  return 'vz';
+}
+
+// Universal VZ login function
+async function performLogin(page, email, password, domainType) {
+  if (domainType === 'manopinigai') {
+    console.log('Logging into Mano Pinigai...');
+    await page.goto('https://prisijungimas.vz.lt/mano-pinigai', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  } else {
+    console.log('Logging into VZ...');
+    await page.goto('https://prisijungimas.vz.lt/verslo-zinios', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  }
+  
+  await delay(3000);
+
+  // Email input
+  const emailSelectors = ['#email', 'input[id="email"]', 'input[type="text"][placeholder*="pašto"]', 'input[autocomplete="vzusername"]', 'input[type="text"]', 'input[name="email"]'];
+  let emailFound = false;
+
+  for (const selector of emailSelectors) {
+    try {
+      await page.waitForSelector(selector, { timeout: 5000 });
+      await page.type(selector, email, { delay: 100 });
+      emailFound = true;
+      break;
+    } catch {}
+  }
+
+  if (!emailFound) throw new Error('Email input not found');
+
+  await page.click('button[type="submit"]');
+  await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+
+  // Password input
+  const passwordSelectors = ['input[type="password"]', '#password', 'input[name="password"]'];
+  let passwordEntered = false;
+  
+  for (const selector of passwordSelectors) {
+    try {
+      await page.waitForSelector(selector, { timeout: 10000 });
+      await page.type(selector, password, { delay: 100 });
+      await page.click('button[type="submit"]');
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+      passwordEntered = true;
+      break;
+    } catch {}
+  }
+
+  if (!passwordEntered) throw new Error('Password input not found');
+  
+  console.log(`✅ Successfully logged into ${domainType === 'manopinigai' ? 'Mano Pinigai' : 'VZ'}`);
+}
 
 async function scrapeVZArticle(url, email, password) {
   const browser = await puppeteer.launch({
@@ -22,158 +79,162 @@ async function scrapeVZArticle(url, email, password) {
     page.setDefaultTimeout(30000);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-    console.log('Accessing VZ login page...');
-    await page.goto('https://prisijungimas.vz.lt/verslo-zinios', { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await delay(3000);
+    // Detect domain type
+    const domainType = getDomainType(url);
+    console.log(`Domain detected: ${domainType} for URL: ${url}`);
 
-    const emailSelectors = ['#email', 'input[id="email"]', 'input[type="text"][placeholder*="pašto"]', 'input[autocomplete="vzusername"]', 'input[type="text"]', 'input[name="email"]'];
-    let emailFound = false;
+    // Perform appropriate login
+    await performLogin(page, email, password, domainType);
 
-    for (const selector of emailSelectors) {
-      try {
-        await page.waitForSelector(selector, { timeout: 5000 });
-        await page.type(selector, email, { delay: 100 });
-        emailFound = true;
-        break;
-      } catch {}
-    }
-
-    if (!emailFound) throw new Error('Email input not found');
-
-    await page.click('button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
-
-    const passwordSelectors = ['input[type="password"]', '#password', 'input[name="password"]'];
-    for (const selector of passwordSelectors) {
-      try {
-        await page.waitForSelector(selector, { timeout: 10000 });
-        await page.type(selector, password, { delay: 100 });
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
-        break;
-      } catch {}
-    }
-
+    // Navigate to article
     console.log(`Accessing article: ${url}`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await delay(5000);
 
-    // VŽ specifinis content extraction
-const articleText = await page.evaluate(() => {
-  let content = '';
-  
-  // 1. Ištraukti summary
-  const summaryElement = document.querySelector('summary');
-  if (summaryElement) {
-    content += summaryElement.textContent.trim() + '\n\n';
-  }
-  
-  // 2. Pašalinti nereikalingus elementus prieš analizę
-  const unwantedSelectors = [
-    '.infogram-embed',
-    '.sas',
-    '.has-ad-desktop',
-    '.rekvizitai-embed',
-    'iframe[src*="infogram"]',
-    'iframe[src*="rekvizitai"]',
-    'figure.infogram-embed',
-    'figure.rekvizitai-embed',
-    '.author-disclaimer'
-  ];
-  
-  unwantedSelectors.forEach(selector => {
-    document.querySelectorAll(selector).forEach(el => el.remove());
-  });
-  
-  // 3. Ištraukti content-paragraph tekstus (ORIGINALUS VEIKIANTIS KODAS)
-  const contentParagraphs = document.querySelectorAll('.content-paragraph');
-  
-  contentParagraphs.forEach(paragraph => {
-    // Praleisti, jei yra italic disclaimer (tekste <i>)
-    if (paragraph.querySelector('i')) return;
-    
-    // NAUJA LOGIKA: Tikrinti ar tai antraštė
-    const strongElement = paragraph.querySelector('strong');
-    if (strongElement && 
-        paragraph.textContent.trim() === strongElement.textContent.trim() &&
-        strongElement.textContent.trim().length > 5) {
-      // Tai antraštė - pridėti be papildomų simbolių
-      content += strongElement.textContent.trim() + '\n\n';
-      return;
-    }
-    
-    // ORIGINALUS KODAS: Įprastas paragrafas
-    let paragraphText = '';
-    
-    Array.from(paragraph.childNodes).forEach(node => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        // Paprastas tekstas
-        paragraphText += node.textContent;
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.tagName === 'A') {
-          // Link tekstas be HTML tagų
-          paragraphText += node.textContent;
-        } else if (node.tagName !== 'I') {
-          // Kiti elementai, bet ne italic
-          paragraphText += node.textContent;
-        }
-      }
-    });
-    
-    // Pridėti paragrafo tekstą, jei jis neprastas
-    const cleanText = paragraphText.trim();
-    if (cleanText && cleanText.length > 10) {
-      content += cleanText + '\n\n';
-    }
-  });
-  
-  // 4. Fallback (ORIGINALUS KODAS)
-  if (!content || content.trim().length < 100) {
-    const fallbackSelectors = ['.article-content', '.article-body', '.content-body', 'article .content', 'main article'];
-    
-    for (const selector of fallbackSelectors) {
-      const element = document.querySelector(selector);
-      if (element) {
-        element.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed').forEach(el => el.remove());
-        const text = element.innerText || element.textContent || '';
-        if (text.trim().length > 200) {
-          content = text.trim();
-          break;
-        }
-      }
-    }
-  }
-  
-  return content.trim();
-});
+    // Domain-specific content extraction
+    const articleText = await page.evaluate((domainType) => {
+      let content = '';
+      
+      // Remove unwanted elements first
+      const unwantedSelectors = [
+        '.infogram-embed', '.sas', '.has-ad-desktop', '.rekvizitai-embed',
+        'iframe[src*="infogram"]', 'iframe[src*="rekvizitai"]',
+        'figure.infogram-embed', 'figure.rekvizitai-embed',
+        '.author-disclaimer', '.suggestion-form', 'form',
+        '.article-social-links', '.article-comments',
+        'script', 'style', 'nav', 'header', 'footer',
+        '.advertisement', '.banner', 'figcaption',
+        '.w-full.bg-vzGrey-2', '.additional-info', // ManoPinigai ad blocks
+        '[id^="sas_"]' // SAS ad elements
+      ];
+      
+      unwantedSelectors.forEach(selector => {
+        document.querySelectorAll(selector).forEach(el => el.remove());
+      });
 
-    // Fallback jei vis dar nėra turinio
+      if (domainType === 'manopinigai') {
+        console.log('Using ManoPinigai extraction logic');
+        
+        // ManoPinigai specific extraction
+        const ckContent = document.querySelector('.ck-content.paywall') || document.querySelector('.ck-content');
+        
+        if (ckContent) {
+          // Process all p and h2 elements in order
+          const contentElements = ckContent.querySelectorAll('p, h2, h3, h4');
+          
+          contentElements.forEach(element => {
+            let text = element.textContent?.trim();
+            
+            if (!text || text.length < 5) return;
+            
+            // Skip unwanted content
+            if (text.includes('Prenumeruoti') || 
+                text.includes('Prisijungti') || 
+                text.includes('DAUGIAU SKAITYKITE') ||
+                text.includes('Norite pasiūlyti temą') ||
+                text.includes('redaktoriams')) {
+              return;
+            }
+            
+            // Add headers with spacing
+            if (element.tagName === 'H2' || element.tagName === 'H3' || element.tagName === 'H4') {
+              content += '\n' + text + '\n\n';
+            } else {
+              // Regular paragraph
+              content += text + '\n\n';
+            }
+          });
+        }
+        
+      } else {
+        console.log('Using VZ extraction logic');
+        
+        // Original VZ extraction logic
+        const summaryElement = document.querySelector('summary');
+        if (summaryElement) {
+          content += summaryElement.textContent.trim() + '\n\n';
+        }
+        
+        const contentParagraphs = document.querySelectorAll('.content-paragraph');
+        
+        contentParagraphs.forEach(paragraph => {
+          if (paragraph.querySelector('i')) return; // Skip disclaimers
+          
+          // Check if it's a header
+          const strongElement = paragraph.querySelector('strong');
+          if (strongElement && 
+              paragraph.textContent.trim() === strongElement.textContent.trim() &&
+              strongElement.textContent.trim().length > 5) {
+            content += strongElement.textContent.trim() + '\n\n';
+            return;
+          }
+          
+          // Regular paragraph
+          let paragraphText = '';
+          
+          Array.from(paragraph.childNodes).forEach(node => {
+            if (node.nodeType === Node.TEXT_NODE) {
+              paragraphText += node.textContent;
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+              if (node.tagName === 'A') {
+                paragraphText += node.textContent;
+              } else if (node.tagName !== 'I') {
+                paragraphText += node.textContent;
+              }
+            }
+          });
+          
+          const cleanText = paragraphText.trim();
+          if (cleanText && cleanText.length > 10) {
+            content += cleanText + '\n\n';
+          }
+        });
+      }
+      
+      // Universal fallback for both domains
+      if (!content || content.trim().length < 100) {
+        console.log('Using fallback extraction');
+        const fallbackSelectors = [
+          '.article-content', '.article-body', '.content-body', 
+          'article .content', 'main article', '.post-content', '.entry-content'
+        ];
+        
+        for (const selector of fallbackSelectors) {
+          const element = document.querySelector(selector);
+          if (element) {
+            const text = element.innerText || element.textContent || '';
+            if (text.trim().length > 200) {
+              content = text.trim();
+              break;
+            }
+          }
+        }
+      }
+      
+      console.log(`Content extracted length: ${content.length}`);
+      return content.trim();
+    }, domainType);
+
+    // Final fallback
     let finalArticleText = articleText;
     if (!finalArticleText || finalArticleText.length < 100) {
       finalArticleText = await page.evaluate(() => {
-        // Pašalinti visus nereikalingus elementus
-        document.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed').forEach(el => el.remove());
-        const main = document.querySelector('main') || document.querySelector('.main') || document.body;
+        // Remove all unwanted elements
+        document.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed, .paywall, .subscription-box').forEach(el => el.remove());
+        const main = document.querySelector('main') || document.querySelector('.main') || document.querySelector('article') || document.body;
         return main.innerText || '';
       });
     }
 
     if (!finalArticleText || finalArticleText.length < 50) {
-      throw new Error('Article content too short or not found');
+      throw new Error('Article content too short or not found - might be behind paywall');
     }
 
     console.log('Content preview:', finalArticleText.substring(0, 200) + '...');
-
-    await axios.post(process.env.WEBHOOK_URL, {
-      url: process.env.URL,
-      title: process.env.TITLE,
-      pubDate: process.env.PUBDATE,
-      text: finalArticleText.substring(0, 8000),
-      trending_topics: process.env.TRENDING_TOPICS || ''
-    });
-
-    console.log('✅ Content sent to webhook.');
-    return 'Done';
+    console.log(`Content length: ${finalArticleText.length} characters`);
+    
+    return finalArticleText.substring(0, 8000);
+    
   } catch (error) {
     console.error('❌ Error:', error.message);
     throw error;
@@ -182,16 +243,79 @@ const articleText = await page.evaluate(() => {
   }
 }
 
+// BATCH PROCESSING FUNKCIJA
+async function scrapeBatch() {
+  const articles = JSON.parse(process.env.ARTICLES || '[]');
+  const trendingTopics = process.env.TRENDING_TOPICS || '';
+  const webhookUrl = process.env.WEBHOOK_URL;
+
+  console.log(`🎯 Starting batch scraping for ${articles.length} articles`);
+  
+  // Log domain distribution
+  const vzCount = articles.filter(a => !a.url.includes('manopinigai')).length;
+  const manoPinigaiCount = articles.filter(a => a.url.includes('manopinigai')).length;
+  console.log(`Domain distribution: ${vzCount} VZ articles, ${manoPinigaiCount} ManoPinigai articles`);
+  
+  const results = [];
+  
+  for (let i = 0; i < articles.length; i++) {
+    const article = articles[i];
+    
+    try {
+      const domainType = getDomainType(article.url);
+      console.log(`[${i + 1}/${articles.length}] Scraping (${domainType}): ${article.title?.substring(0, 50)}...`);
+      
+      const scrapedText = await scrapeVZArticle(
+        article.url,
+        process.env.VZ_EMAIL,
+        process.env.VZ_PASSWORD
+      );
+      
+      results.push({
+        url: article.url,
+        title: article.title,
+        pubDate: article.pubDate,
+        text: scrapedText,
+        trending_topics: trendingTopics
+      });
+      
+      console.log(`✅ [${i + 1}/${articles.length}] Successfully scraped ${domainType} article`);
+      
+      // Delay between articles
+      if (i < articles.length - 1) {
+        console.log('⏳ Waiting 3 seconds before next article...');
+        await delay(3000);
+      }
+      
+    } catch (error) {
+      console.error(`❌ [${i + 1}/${articles.length}] Error scraping ${article.url}:`, error.message);
+      // Continue with other articles
+    }
+  }
+  
+  console.log(`📊 Batch complete: ${results.length}/${articles.length} articles scraped successfully`);
+  
+  // Send batch to webhook
+  if (results.length > 0) {
+    try {
+      await axios.post(webhookUrl, { articles: results });
+      console.log(`🚀 Successfully sent batch of ${results.length} articles to webhook`);
+    } catch (error) {
+      console.error('❌ Failed to send batch to webhook:', error.message);
+      throw error;
+    }
+  } else {
+    console.log('⚠️ No articles scraped successfully - nothing to send');
+  }
+}
+
+// MAIN EXECUTION
 (async () => {
   try {
-    await scrapeVZArticle(
-      process.env.URL,
-      process.env.VZ_EMAIL,
-      process.env.VZ_PASSWORD
-    );
+    await scrapeBatch();
+    console.log('🎉 Batch scraping completed successfully');
   } catch (e) {
+    console.error('💥 Batch scraping failed:', e.message);
     process.exit(1);
   }
 })();
-
-
