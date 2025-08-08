@@ -166,6 +166,8 @@ async function scrapeVZArticle(url, email, password) {
           const contentElements = ckContent.querySelectorAll('p, h2, h3, h4, strong');
           console.log(`Found ${contentElements.length} content elements`);
           
+          let foundEndMarker = false;
+          
           contentElements.forEach((element, index) => {
             let text = element.textContent?.trim();
             
@@ -174,19 +176,44 @@ async function scrapeVZArticle(url, email, password) {
               return;
             }
             
+            // Stop processing after "DAUGIAU SKAITYKITE" section
+            if (text.includes('DAUGIAU SKAITYKITE') || text.includes('SUSIJĘ STRAIPSNIAI')) {
+              console.log(`Found end marker at element ${index}: ${text}`);
+              foundEndMarker = true;
+              return;
+            }
+            
+            if (foundEndMarker) {
+              console.log(`Skipping post-end-marker content: ${text.substring(0, 50)}...`);
+              return;
+            }
+            
             // Debug first few elements
             if (index < 5) {
               console.log(`Element ${index} (${element.tagName}): ${text.substring(0, 100)}...`);
             }
             
-            // Skip unwanted content
+            // Skip unwanted content (enhanced filtering)
             if (text.includes('Prenumeruoti') || 
                 text.includes('Prisijungti') || 
                 text.includes('DAUGIAU SKAITYKITE') ||
                 text.includes('Norite pasiūlyti temą') ||
                 text.includes('redaktoriams') ||
                 text.includes('nuotr.') ||
-                text.includes('koliažas')) {
+                text.includes('koliažas') ||
+                // Skip related articles and links
+                element.tagName === 'A' ||
+                element.parentNode?.tagName === 'A' ||
+                text.includes('Ar verta antros pakopos') ||
+                text.includes('II pensijų pakopos pinigai') ||
+                text.includes('pensijų pakopos pinigus') ||
+                // Skip short link-like texts
+                (text.length < 100 && (
+                  text.includes('pinigus perkelti') ||
+                  text.includes('santaupas įdarbinti') ||
+                  text.includes('kodėl svarbu') ||
+                  text.includes('specialistai pataria')
+                ))) {
               console.log(`Skipping unwanted content: ${text.substring(0, 50)}...`);
               return;
             }
