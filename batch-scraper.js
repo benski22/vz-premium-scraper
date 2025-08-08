@@ -177,7 +177,9 @@ async function scrapeVZArticle(url, email, password) {
             }
             
             // Stop processing after "DAUGIAU SKAITYKITE" section
-            if (text.includes('DAUGIAU SKAITYKITE') || text.includes('SUSIJĘ STRAIPSNIAI')) {
+            if (text.includes('DAUGIAU SKAITYKITE') || 
+                text.includes('SUSIJĘ STRAIPSNIAI') ||
+                text.includes('TAIP PAT SKAITYKITE')) {
               console.log(`Found end marker at element ${index}: ${text}`);
               foundEndMarker = true;
               return;
