@@ -9,6 +9,64 @@ const axios = require('axios');
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Detect domain type from URL
+function getDomainType(url) {
+  if (url.includes('manopinigai.vz.lt')) {
+    return 'manopinigai';
+  }
+  return 'vz';
+}
+
+// Universal VZ login function
+async function performLogin(page, email, password, domainType) {
+  if (domainType === 'manopinigai') {
+    console.log('Logging into Mano Pinigai...');
+    await page.goto('https://prisijungimas.vz.lt/mano-pinigai', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  } else {
+    console.log('Logging into VZ...');
+    await page.goto('https://prisijungimas.vz.lt/verslo-zinios', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  }
+  
+  await delay(3000);
+
+  // Email input
+  const emailSelectors = ['#email', 'input[id="email"]', 'input[type="text"][placeholder*="pašto"]', 'input[autocomplete="vzusername"]', 'input[type="text"]', 'input[name="email"]'];
+  let emailFound = false;
+
+  for (const selector of emailSelectors) {
+    try {
+      await page.waitForSelector(selector, { timeout: 5000 });
+      await page.type(selector, email, { delay: 100 });
+      emailFound = true;
+      break;
+    } catch {}
+  }
+
+  if (!emailFound) throw new Error('Email input not found');
+
+  await page.click('button[type="submit"]');
+  await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+
+  // Password input
+  const passwordSelectors = ['input[type="password"]', '#password', 'input[name="password"]'];
+  let passwordEntered = false;
+  
+  for (const selector of passwordSelectors) {
+    try {
+      await page.waitForSelector(selector, { timeout: 10000 });
+      await page.type(selector, password, { delay: 100 });
+      await page.click('button[type="submit"]');
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+      passwordEntered = true;
+      break;
+    } catch {}
+  }
+
+  if (!passwordEntered) throw new Error('Password input not found');
+  
+  console.log(`✅ Successfully logged into ${domainType === 'manopinigai' ? 'Mano Pinigai' : 'VZ'}`);
+}
+
 async function scrapeVZArticle(url, email, password) {
   const browser = await puppeteer.launch({
     headless: "new",
@@ -21,43 +79,19 @@ async function scrapeVZArticle(url, email, password) {
     page.setDefaultTimeout(30000);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-    console.log('Accessing VZ login page...');
-    await page.goto('https://prisijungimas.vz.lt/verslo-zinios', { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await delay(3000);
+    // Detect domain type
+    const domainType = getDomainType(url);
+    console.log(`Domain detected: ${domainType} for URL: ${url}`);
 
-    const emailSelectors = ['#email', 'input[id="email"]', 'input[type="text"][placeholder*="pašto"]', 'input[autocomplete="vzusername"]', 'input[type="text"]', 'input[name="email"]'];
-    let emailFound = false;
+    // Perform appropriate login
+    await performLogin(page, email, password, domainType);
 
-    for (const selector of emailSelectors) {
-      try {
-        await page.waitForSelector(selector, { timeout: 5000 });
-        await page.type(selector, email, { delay: 100 });
-        emailFound = true;
-        break;
-      } catch {}
-    }
-
-    if (!emailFound) throw new Error('Email input not found');
-
-    await page.click('button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
-
-    const passwordSelectors = ['input[type="password"]', '#password', 'input[name="password"]'];
-    for (const selector of passwordSelectors) {
-      try {
-        await page.waitForSelector(selector, { timeout: 10000 });
-        await page.type(selector, password, { delay: 100 });
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
-        break;
-      } catch {}
-    }
-
+    // Navigate to article
     console.log(`Accessing article: ${url}`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await delay(5000);
 
-    // VŽ specifinis content extraction
+    // Universal content extraction (works for both VZ and ManoPinigai)
     const articleText = await page.evaluate(() => {
       let content = '';
       
@@ -67,7 +101,7 @@ async function scrapeVZArticle(url, email, password) {
         content += summaryElement.textContent.trim() + '\n\n';
       }
       
-      // 2. Pašalinti nereikalingus elementus prieš analizę
+      // 2. Pašalinti nereikalingus elementus
       const unwantedSelectors = [
         '.infogram-embed',
         '.sas',
@@ -77,31 +111,32 @@ async function scrapeVZArticle(url, email, password) {
         'iframe[src*="rekvizitai"]',
         'figure.infogram-embed',
         'figure.rekvizitai-embed',
-        '.author-disclaimer'
+        '.author-disclaimer',
+        '.paywall', // ManoPinigai paywall
+        '.subscription-box' // Subscription prompts
       ];
       
       unwantedSelectors.forEach(selector => {
         document.querySelectorAll(selector).forEach(el => el.remove());
       });
       
-      // 3. Ištraukti content-paragraph tekstus
+      // 3. Ištraukti content-paragraph tekstus (VZ)
       const contentParagraphs = document.querySelectorAll('.content-paragraph');
       
       contentParagraphs.forEach(paragraph => {
-        // Praleisti, jei yra italic disclaimer
+        // Skip italic disclaimers
         if (paragraph.querySelector('i')) return;
         
-        // Tikrinti ar tai antraštė
+        // Check if it's a header
         const strongElement = paragraph.querySelector('strong');
         if (strongElement && 
             paragraph.textContent.trim() === strongElement.textContent.trim() &&
             strongElement.textContent.trim().length > 5) {
-          // Tai antraštė
           content += strongElement.textContent.trim() + '\n\n';
           return;
         }
         
-        // Įprastas paragrafas
+        // Regular paragraph
         let paragraphText = '';
         
         Array.from(paragraph.childNodes).forEach(node => {
@@ -122,14 +157,47 @@ async function scrapeVZArticle(url, email, password) {
         }
       });
       
-      // 4. Fallback
+      // 4. ManoPinigai specific content extraction
       if (!content || content.trim().length < 100) {
-        const fallbackSelectors = ['.article-content', '.article-body', '.content-body', 'article .content', 'main article'];
+        const manoPinigaiSelectors = [
+          '.article-content p',
+          '.content-body p', 
+          '.post-content p',
+          'article p',
+          '.entry-content p'
+        ];
+        
+        for (const selector of manoPinigaiSelectors) {
+          const paragraphs = document.querySelectorAll(selector);
+          if (paragraphs.length > 0) {
+            paragraphs.forEach(p => {
+              const text = p.textContent?.trim();
+              if (text && text.length > 20 && !text.includes('Prenumeruoti') && !text.includes('Prisijungti')) {
+                content += text + '\n\n';
+              }
+            });
+            if (content.trim().length > 200) break;
+          }
+        }
+      }
+      
+      // 5. Fallback for both domains
+      if (!content || content.trim().length < 100) {
+        const fallbackSelectors = [
+          '.article-content', 
+          '.article-body', 
+          '.content-body', 
+          'article .content', 
+          'main article',
+          '.post-content',
+          '.entry-content'
+        ];
         
         for (const selector of fallbackSelectors) {
           const element = document.querySelector(selector);
           if (element) {
-            element.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed').forEach(el => el.remove());
+            // Remove unwanted elements
+            element.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed, .paywall, .subscription-box').forEach(el => el.remove());
             const text = element.innerText || element.textContent || '';
             if (text.trim().length > 200) {
               content = text.trim();
@@ -142,23 +210,24 @@ async function scrapeVZArticle(url, email, password) {
       return content.trim();
     });
 
-    // Fallback jei vis dar nėra turinio
+    // Final fallback
     let finalArticleText = articleText;
     if (!finalArticleText || finalArticleText.length < 100) {
       finalArticleText = await page.evaluate(() => {
-        document.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed').forEach(el => el.remove());
-        const main = document.querySelector('main') || document.querySelector('.main') || document.body;
+        // Remove all unwanted elements
+        document.querySelectorAll('script, style, nav, header, footer, .advertisement, .banner, .sas, .infogram-embed, .rekvizitai-embed, .paywall, .subscription-box').forEach(el => el.remove());
+        const main = document.querySelector('main') || document.querySelector('.main') || document.querySelector('article') || document.body;
         return main.innerText || '';
       });
     }
 
     if (!finalArticleText || finalArticleText.length < 50) {
-      throw new Error('Article content too short or not found');
+      throw new Error('Article content too short or not found - might be behind paywall');
     }
 
     console.log('Content preview:', finalArticleText.substring(0, 200) + '...');
+    console.log(`Content length: ${finalArticleText.length} characters`);
     
-    // GRĄŽINTI TEKSTĄ (ne siųsti webhook)
     return finalArticleText.substring(0, 8000);
     
   } catch (error) {
@@ -177,13 +246,19 @@ async function scrapeBatch() {
 
   console.log(`🎯 Starting batch scraping for ${articles.length} articles`);
   
+  // Log domain distribution
+  const vzCount = articles.filter(a => !a.url.includes('manopinigai')).length;
+  const manoPinigaiCount = articles.filter(a => a.url.includes('manopinigai')).length;
+  console.log(`Domain distribution: ${vzCount} VZ articles, ${manoPinigaiCount} ManoPinigai articles`);
+  
   const results = [];
   
   for (let i = 0; i < articles.length; i++) {
     const article = articles[i];
     
     try {
-      console.log(`[${i + 1}/${articles.length}] Scraping: ${article.title?.substring(0, 50)}...`);
+      const domainType = getDomainType(article.url);
+      console.log(`[${i + 1}/${articles.length}] Scraping (${domainType}): ${article.title?.substring(0, 50)}...`);
       
       const scrapedText = await scrapeVZArticle(
         article.url,
@@ -199,9 +274,9 @@ async function scrapeBatch() {
         trending_topics: trendingTopics
       });
       
-      console.log(`✅ [${i + 1}/${articles.length}] Successfully scraped`);
+      console.log(`✅ [${i + 1}/${articles.length}] Successfully scraped ${domainType} article`);
       
-      // Delay tarp straipsnių (išvengti rate limiting)
+      // Delay between articles
       if (i < articles.length - 1) {
         console.log('⏳ Waiting 3 seconds before next article...');
         await delay(3000);
@@ -209,13 +284,13 @@ async function scrapeBatch() {
       
     } catch (error) {
       console.error(`❌ [${i + 1}/${articles.length}] Error scraping ${article.url}:`, error.message);
-      // Tęsti su kitais straipsniais
+      // Continue with other articles
     }
   }
   
   console.log(`📊 Batch complete: ${results.length}/${articles.length} articles scraped successfully`);
   
-  // Siųsti visą batch'ą vienu webhook call'u
+  // Send batch to webhook
   if (results.length > 0) {
     try {
       await axios.post(webhookUrl, { articles: results });
