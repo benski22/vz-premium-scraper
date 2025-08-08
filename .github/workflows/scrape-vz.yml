@@ -2,7 +2,7 @@ name: VZ Premium Scraper
 
 on:
   repository_dispatch:
-    types: [scrape-request-batch] # Naujas event type
+    types: [scrape-request] # Naujas event type
 
 jobs:
   scrape:
