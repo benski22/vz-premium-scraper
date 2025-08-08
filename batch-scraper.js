@@ -323,7 +323,15 @@ async function scrapeVZArticle(url, email, password) {
     console.log('Content preview:', finalArticleText.substring(0, 200) + '...');
     console.log(`Content length: ${finalArticleText.length} characters`);
     
-    return finalArticleText.substring(0, 8000);
+    // Increase limit from 8000 to 20000 characters
+    const maxLength = 20000;
+    const trimmedText = finalArticleText.substring(0, maxLength);
+    
+    if (finalArticleText.length > maxLength) {
+      console.log(`⚠️  Content truncated from ${finalArticleText.length} to ${maxLength} characters`);
+    }
+    
+    return trimmedText;
     
   } catch (error) {
     console.error('❌ Error:', error.message);
