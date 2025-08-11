@@ -1,20 +1,27 @@
+// batch_js_merged_preferred_logs.js
 /**
  * VZ / ManoPinigai batch scraper for n8n "Wait (On Webhook call)" architecture.
- * IMPORTANT: n8n must inject the per-execution resume URL into ENV WEBHOOK_URL (use {{$execution.resumeUrl}}).
- * Optional WEBHOOK_TOKEN is appended as ?token=... and sent as X-Webhook-Token header.
+ * n8n must inject per-execution resume URL into ENV WEBHOOK_URL (use {{$execution.resumeUrl}}).
+ * Optional auth:
+ *  - Token via header (WEBHOOK_HEADER_NAME, default X-Webhook-Token) and/or query (?token=...)
+ *  - Basic auth via WEBHOOK_BASIC_USER / WEBHOOK_BASIC_PASS
+ * Strictness:
+ *  - STRICT_WEBHOOK = "true" makes POST failure fail the job (process.exit(1)).
  */
-
-console.log('OPTIMIZED BATCH ENV:', {
-  articlesCount: (() => { try { return JSON.parse(process.env.ARTICLES || '[]').length; } catch { return 0; } })(),
-  trendingTopics: process.env.TRENDING_TOPICS ? 'Present' : 'Missing',
-  webhook: process.env.WEBHOOK_URL,
-});
 
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
+// ----- Logs like OLD version -----
+console.log('OPTIMIZED BATCH ENV:', {
+  articlesCount: (() => { try { return JSON.parse(process.env.ARTICLES || '[]').length; } catch { return 0; } })(),
+  trendingTopics: process.env.TRENDING_TOPICS ? 'Present' : 'Missing',
+  webhook: process.env.WEBHOOK_URL
+});
+
+// ----- Helpers -----
 function getDomainType(url) { return url.includes('manopinigai.vz.lt') ? 'manopinigai' : 'vz'; }
 function groupArticlesByDomain(articles) {
   const vzArticles = articles.filter(a => getDomainType(a.url) === 'vz');
@@ -22,30 +29,51 @@ function groupArticlesByDomain(articles) {
   return { vzArticles, manoPinigaiArticles };
 }
 
-async function httpPostWithRetry(url, data, headers = {}, attempts = 3) {
+async function postToWebhookWithFallbacks(baseUrl, data) {
+  const token = process.env.WEBHOOK_TOKEN || '';
+  const headerName = process.env.WEBHOOK_HEADER_NAME || 'X-Webhook-Token';
+  const basicUser = process.env.WEBHOOK_BASIC_USER || '';
+  const basicPass = process.env.WEBHOOK_BASIC_PASS || '';
+
+  const tryUrls = [];
+  // 1) base + token query (jei token yra)
+  if (token) {
+    tryUrls.push(baseUrl.includes('?') ? `${baseUrl}&token=${encodeURIComponent(token)}` : `${baseUrl}?token=${encodeURIComponent(token)}`);
+  }
+  // 2) base be query
+  tryUrls.push(baseUrl);
+
+  const headersList = [];
+  // a) su header token (jei token yra)
+  if (token) headersList.push({ [headerName]: token });
+  // b) be header token
+  headersList.push({});
+
+  const axiosBase = {
+    timeout: 20000,
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    validateStatus: (s) => s >= 200 && s < 300, // kaip „old“ – non-2xx = klaida
+  };
+  if (basicUser && basicPass) axiosBase.auth = { username: basicUser, password: basicPass };
+
   let lastErr;
-  for (let i = 1; i <= attempts; i++) {
-    try {
-      const res = await axios.post(url, data, {
-        headers: { 'Content-Type': 'application/json', ...headers },
-        timeout: 20000,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        validateStatus: s => s >= 200 && s < 500,
-      });
-      if (res.status >= 200 && res.status < 300) return res;
-      lastErr = new Error(`HTTP ${res.status}: ${JSON.stringify(res.data)?.slice(0,500)}`);
-      console.warn(`POST attempt ${i}/${attempts} failed: ${lastErr.message}`);
-      await delay(1000 * i);
-    } catch (e) {
-      lastErr = e;
-      console.warn(`POST attempt ${i}/${attempts} error: ${e.message}`);
-      await delay(1000 * i);
+  for (const url of tryUrls) {
+    for (const headers of headersList) {
+      try {
+        const res = await axios.post(url, data, { ...axiosBase, headers: { 'Content-Type': 'application/json', ...headers } });
+        return res;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`POST attempt failed to ${url} with headers=${Object.keys(headers).join(',') || 'none'}: ${e.message}`);
+        await delay(1000);
+      }
     }
   }
   throw lastErr;
 }
 
+// ----- Auth -----
 async function performLogin(page, email, password, domainType) {
   console.log(`🔐 Logging into ${domainType === 'manopinigai' ? 'Mano Pinigai' : 'VZ'}...`);
   const loginUrl = domainType === 'manopinigai'
@@ -53,12 +81,12 @@ async function performLogin(page, email, password, domainType) {
     : 'https://prisijungimas.vz.lt/verslo-zinios';
 
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await delay(1500);
+  await delay(2000);
 
   const emailSelectors = ['#email','input[id="email"]','input[type="text"][placeholder*="pašto"]','input[autocomplete="vzusername"]','input[type="text"]','input[name="email"]'];
   let emailFound = false;
   for (const s of emailSelectors) {
-    try { await page.waitForSelector(s, { timeout: 5000 }); await page.type(s, email, { delay: 30 }); emailFound = true; break; } catch {}
+    try { await page.waitForSelector(s, { timeout: 5000 }); await page.type(s, email, { delay: 50 }); emailFound = true; break; } catch {}
   }
   if (!emailFound) throw new Error('Email input not found');
 
@@ -70,7 +98,7 @@ async function performLogin(page, email, password, domainType) {
   for (const s of passwordSelectors) {
     try {
       await page.waitForSelector(s, { timeout: 10000 });
-      await page.type(s, password, { delay: 30 });
+      await page.type(s, password, { delay: 50 });
       await page.click('button[type="submit"]');
       await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
       pwOk = true; break;
@@ -78,22 +106,29 @@ async function performLogin(page, email, password, domainType) {
   }
   if (!pwOk) throw new Error('Password input not found');
 
-  console.log(`✅ Logged in to ${domainType === 'manopinigai' ? 'Mano Pinigai' : 'VZ'}`);
+  console.log(`✅ Successfully logged into ${domainType === 'manopinigai' ? 'Mano Pinigai' : 'VZ'}`);
 }
 
+// ----- Extraction (su stabilumo retry) -----
 async function extractArticleContent(page, url, domainType) {
   console.log(`📖 Extracting content from: ${url}`);
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+  // mažas helperis prieš evaluate – pasiruošiam
+  const safeGoto = async () => {
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+    // ManoPinigai – dažniau lifecycles/perskydimai
+    await delay(domainType === 'manopinigai' ? 2000 : 1000);
+  };
+
+  const attempt = async () => {
+    await safeGoto();
+
     if (domainType === 'manopinigai') {
       const isLoginPage = await page.evaluate(() =>
         window.location.href.includes('prisijungimas') ||
         document.querySelector('input[type="password"]') !== null
       );
       if (isLoginPage) throw new Error('Still on login page - session might have expired');
-      await delay(1200);
-    } else {
-      await delay(800);
     }
 
     const articleText = await page.evaluate((domainType) => {
@@ -185,21 +220,43 @@ async function extractArticleContent(page, url, domainType) {
         return paras.slice(0, 20).join('\n\n');
       });
     }
-    if (!finalText || finalText.length < 50) throw new Error(`Article content too short (${finalText?.length || 0}) - paywall?`);
+    if (!finalText || finalText.length < 50) throw new Error(`Article content too short (${finalText?.length || 0} chars) - might be behind paywall`);
+
+    console.log(`📝 Content preview: ${finalText.substring(0, 150)}...`);
+    console.log(`📊 Content length: ${finalText.length} characters`);
 
     const maxLength = 20000;
-    if (finalText.length > maxLength) { console.log(`⚠️ Content truncated: ${finalText.length} -> ${maxLength}`); finalText = finalText.substring(0, maxLength); }
-
+    if (finalText.length > maxLength) {
+      console.log(`⚠️  Content truncated from ${finalText.length} to ${maxLength} characters`);
+      finalText = finalText.substring(0, maxLength);
+    }
     return finalText;
-  } catch (e) {
-    console.error(`❌ Extract failed ${url}: ${e.message}`);
-    throw e;
+  };
+
+  // Retry ant žinomos Puppeteer bėdos
+  // „Execution context was destroyed, most likely because of a navigation.“
+  for (let r = 1; r <= 3; r++) {
+    try {
+      if (r > 1) console.log(`🔁 Retrying (${r}/3) due to navigation/context issue...`);
+      return await attempt();
+    } catch (e) {
+      if (e.message && e.message.includes('Execution context was destroyed')) {
+        // hard reload
+        try { await page.reload({ waitUntil: 'networkidle2' }); } catch {}
+        await delay(800);
+        continue;
+      }
+      // kitos klaidos – nelekiam lauk, o metame toliau; išorinis catch nuspręs
+      throw e;
+    }
   }
+  throw new Error('Extraction failed after 3 attempts');
 }
 
+// ----- Batch by domain -----
 async function scrapeArticlesByDomain(articles, domainType, email, password, trendingTopics) {
-  if (!articles?.length) { console.log(`📋 No ${domainType} articles`); return []; }
-  console.log(`🚀 ${domainType} batch: ${articles.length} articles`);
+  if (!articles?.length) { console.log(`📋 No ${domainType} articles to process`); return []; }
+  console.log(`🚀 Starting ${domainType} batch: ${articles.length} articles`);
 
   const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage'] });
   const results = [];
@@ -214,67 +271,66 @@ async function scrapeArticlesByDomain(articles, domainType, email, password, tre
     for (let i = 0; i < articles.length; i++) {
       const a = articles[i];
       try {
-        console.log(`[${i + 1}/${articles.length}] ${domainType.toUpperCase()}: ${a.title?.slice(0,50)}...`);
+        console.log(`[${i + 1}/${articles.length}] ${domainType.toUpperCase()}: ${a.title?.substring(0,50)}...`);
         const text = await extractArticleContent(page, a.url, domainType);
         results.push({ url: a.url, title: a.title, pubDate: a.pubDate, text, trending_topics: trendingTopics });
-        console.log(`✅ Scraped ${domainType} #${i + 1}`);
-        if (i < articles.length - 1) { await delay(1000); }
+        console.log(`✅ [${i + 1}/${articles.length}] Successfully scraped ${domainType} article`);
+        if (i < articles.length - 1) { console.log('⏳ Waiting 1 second before next article...'); await delay(1000); }
       } catch (e) {
-        console.error(`❌ Error on ${a.url}: ${e.message}`);
+        console.error(`❌ [${i + 1}/${articles.length}] Error scraping ${a.url}: ${e.message}`);
         if (e.message.includes('session') || e.message.includes('login')) {
-          console.log('🔄 Re-login attempt...');
-          try { await performLogin(page, email, password, domainType); console.log('✅ Re-login successful'); }
-          catch (re) { console.error('❌ Re-login failed:', re.message); break; }
+          console.log('🔄 Attempting to re-login...');
+          try { await performLogin(page, email, password, domainType); console.log('✅ Re-login successful, continuing...'); }
+          catch (re) { console.error('❌ Re-login failed:', re.message); /* NESUSTOJAM – tęsiam kitus straipsnius */ }
         }
       }
     }
   } catch (e) {
-    console.error(`💥 Critical ${domainType} batch error:`, e.message);
+    console.error(`💥 Critical error in ${domainType} batch:`, e.message);
   } finally {
     await browser.close();
   }
-  console.log(`📊 ${domainType.toUpperCase()} batch done: ${results.length}/${articles.length}`);
+  console.log(`📊 ${domainType.toUpperCase()} batch complete: ${results.length}/${articles.length} articles scraped`);
   return results;
 }
 
+// ----- Full batch -----
 async function scrapeBatchOptimized() {
   let articles = [];
   try { articles = JSON.parse(process.env.ARTICLES || '[]'); } catch {}
   const trendingTopics = process.env.TRENDING_TOPICS || '';
-  const webhookBase = process.env.WEBHOOK_URL; // MUST be n8n $execution.resumeUrl
-  const webhookToken = process.env.WEBHOOK_TOKEN || '';
-  if (!webhookBase) throw new Error('WEBHOOK_URL is missing');
+  const webhookUrl = process.env.WEBHOOK_URL; // MUST be $execution.resumeUrl
+  if (!webhookUrl) throw new Error('WEBHOOK_URL is missing');
 
-  const webhookUrl = webhookToken
-    ? (webhookBase.includes('?') ? `${webhookBase}&token=${encodeURIComponent(webhookToken)}` : `${webhookBase}?token=${encodeURIComponent(webhookToken)}`)
-    : webhookBase;
-
-  console.log(`🎯 Starting batch for ${articles.length} articles`);
+  console.log(`🎯 Starting OPTIMIZED batch scraping for ${articles.length} articles`);
   const { vzArticles, manoPinigaiArticles } = groupArticlesByDomain(articles);
-  console.log(`📊 Domain split: VZ=${vzArticles.length} | ManoPinigai=${manoPinigaiArticles.length}`);
+  console.log(`📊 Domain distribution: ${vzArticles.length} VZ articles, ${manoPinigaiArticles.length} ManoPinigai articles`);
 
   const allResults = [];
   if (vzArticles.length) allResults.push(...await scrapeArticlesByDomain(vzArticles, 'vz', process.env.VZ_EMAIL, process.env.VZ_PASSWORD, trendingTopics));
   if (manoPinigaiArticles.length) allResults.push(...await scrapeArticlesByDomain(manoPinigaiArticles, 'manopinigai', process.env.VZ_EMAIL, process.env.VZ_PASSWORD, trendingTopics));
 
-  console.log(`🎉 Batch complete: ${allResults.length}/${articles.length} scraped successfully`);
+  console.log(`🎉 OPTIMIZED batch complete: ${allResults.length}/${articles.length} articles scraped successfully`);
 
-  const payload = { articles: allResults, trending_topics: trendingTopics, body: { articles: allResults, trending_topics: trendingTopics } };
-  if (allResults.length) {
+  // Payload kaip "old", + trending_topics jei reikia toliau
+  const payload = { articles: allResults, trending_topics: trendingTopics };
+
+  if (allResults.length > 0) {
     try {
-      const headers = webhookToken ? { 'X-Webhook-Token': webhookToken } : {};
-      const res = await httpPostWithRetry(webhookUrl, payload, headers, 3);
-      console.log(`🚀 Sent ${allResults.length} articles to webhook. Response: ${res.status}`);
+      const res = await postToWebhookWithFallbacks(webhookUrl, payload);
+      console.log(`🚀 Successfully sent batch of ${allResults.length} articles to webhook; response ${res.status}`);
     } catch (e) {
-      console.error('❌ Failed to POST to webhook:', e.message);
-      throw e;
+      const strict = String(process.env.STRICT_WEBHOOK || 'false').toLowerCase() === 'true';
+      console.error('❌ Failed to send batch to webhook:', e.message);
+      if (strict) throw e; // tik jei reik, kad job'as kristų
     }
   } else {
-    console.log('⚠️ No successful articles to send');
+    console.log('⚠️ No articles scraped successfully - nothing to send');
   }
 }
 
+// ----- Main -----
 (async () => {
-  try { await scrapeBatchOptimized(); console.log('✅ OPTIMIZED batch scraping completed'); }
+  try { await scrapeBatchOptimized(); console.log('🎉 OPTIMIZED batch scraping completed successfully'); }
   catch (e) { console.error('💥 OPTIMIZED batch scraping failed:', e.message); process.exit(1); }
 })();
