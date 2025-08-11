@@ -1,16 +1,10 @@
-// batch_js_merged_preferred_logs.js
-/**
- * VZ / ManoPinigai batch scraper for n8n "Wait (On Webhook call)" architecture.
- * n8n must inject per-execution resume URL into ENV WEBHOOK_URL (use {{$execution.resumeUrl}}).
- * Optional auth:
- *  - Token via header (WEBHOOK_HEADER_NAME, default X-Webhook-Token) and/or query (?token=...)
- *  - Basic auth via WEBHOOK_BASIC_USER / WEBHOOK_BASIC_PASS
- * Strictness:
- *  - STRICT_WEBHOOK = "true" makes POST failure fail the job (process.exit(1)).
- */
-
 const puppeteer = require('puppeteer');
 const axios = require('axios');
+
+// ▶️ PAGRINDINĖ PATAISA: „žmogiškas“ UA visiems axios POST'ams,
+// kad n8n Wait su "Ignore Bots = On" neblokuotų užklausos.
+axios.defaults.headers.common['User-Agent'] =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
