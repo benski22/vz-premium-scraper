@@ -1,7 +1,7 @@
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 
-// ▶️ PAGRINDINĖ PATAISA: „žmogiškas“ UA visiems axios POST'ams,
+// ▶️ PAGRINDINĖ PATAISA: „žmogiškas" UA visiems axios POST'ams,
 // kad n8n Wait su "Ignore Bots = On" neblokuotų užklausos.
 axios.defaults.headers.common['User-Agent'] =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -11,7 +11,6 @@ const delay = (ms) => new Promise(r => setTimeout(r, ms));
 // ----- Logs like OLD version -----
 console.log('OPTIMIZED BATCH ENV:', {
   articlesCount: (() => { try { return JSON.parse(process.env.ARTICLES || '[]').length; } catch { return 0; } })(),
-  trendingTopics: process.env.TRENDING_TOPICS ? 'Present' : 'Missing',
   webhook: process.env.WEBHOOK_URL
 });
 
@@ -47,7 +46,7 @@ async function postToWebhookWithFallbacks(baseUrl, data) {
     timeout: 20000,
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
-    validateStatus: (s) => s >= 200 && s < 300, // kaip „old“ – non-2xx = klaida
+    validateStatus: (s) => s >= 200 && s < 300, // kaip „old" – non-2xx = klaida
   };
   if (basicUser && basicPass) axiosBase.auth = { username: basicUser, password: basicPass };
 
@@ -228,7 +227,7 @@ async function extractArticleContent(page, url, domainType) {
   };
 
   // Retry ant žinomos Puppeteer bėdos
-  // „Execution context was destroyed, most likely because of a navigation.“
+  // „Execution context was destroyed, most likely because of a navigation."
   for (let r = 1; r <= 3; r++) {
     try {
       if (r > 1) console.log(`🔁 Retrying (${r}/3) due to navigation/context issue...`);
@@ -248,7 +247,7 @@ async function extractArticleContent(page, url, domainType) {
 }
 
 // ----- Batch by domain -----
-async function scrapeArticlesByDomain(articles, domainType, email, password, trendingTopics) {
+async function scrapeArticlesByDomain(articles, domainType, email, password) {
   if (!articles?.length) { console.log(`📋 No ${domainType} articles to process`); return []; }
   console.log(`🚀 Starting ${domainType} batch: ${articles.length} articles`);
 
@@ -267,7 +266,7 @@ async function scrapeArticlesByDomain(articles, domainType, email, password, tre
       try {
         console.log(`[${i + 1}/${articles.length}] ${domainType.toUpperCase()}: ${a.title?.substring(0,50)}...`);
         const text = await extractArticleContent(page, a.url, domainType);
-        results.push({ url: a.url, title: a.title, pubDate: a.pubDate, text, trending_topics: trendingTopics });
+        results.push({ url: a.url, title: a.title, pubDate: a.pubDate, text });
         console.log(`✅ [${i + 1}/${articles.length}] Successfully scraped ${domainType} article`);
         if (i < articles.length - 1) { console.log('⏳ Waiting 1 second before next article...'); await delay(1000); }
       } catch (e) {
@@ -292,7 +291,6 @@ async function scrapeArticlesByDomain(articles, domainType, email, password, tre
 async function scrapeBatchOptimized() {
   let articles = [];
   try { articles = JSON.parse(process.env.ARTICLES || '[]'); } catch {}
-  const trendingTopics = process.env.TRENDING_TOPICS || '';
   const webhookUrl = process.env.WEBHOOK_URL; // MUST be $execution.resumeUrl
   if (!webhookUrl) throw new Error('WEBHOOK_URL is missing');
 
@@ -301,13 +299,13 @@ async function scrapeBatchOptimized() {
   console.log(`📊 Domain distribution: ${vzArticles.length} VZ articles, ${manoPinigaiArticles.length} ManoPinigai articles`);
 
   const allResults = [];
-  if (vzArticles.length) allResults.push(...await scrapeArticlesByDomain(vzArticles, 'vz', process.env.VZ_EMAIL, process.env.VZ_PASSWORD, trendingTopics));
-  if (manoPinigaiArticles.length) allResults.push(...await scrapeArticlesByDomain(manoPinigaiArticles, 'manopinigai', process.env.VZ_EMAIL, process.env.VZ_PASSWORD, trendingTopics));
+  if (vzArticles.length) allResults.push(...await scrapeArticlesByDomain(vzArticles, 'vz', process.env.VZ_EMAIL, process.env.VZ_PASSWORD));
+  if (manoPinigaiArticles.length) allResults.push(...await scrapeArticlesByDomain(manoPinigaiArticles, 'manopinigai', process.env.VZ_EMAIL, process.env.VZ_PASSWORD));
 
   console.log(`🎉 OPTIMIZED batch complete: ${allResults.length}/${articles.length} articles scraped successfully`);
 
-  // Payload kaip "old", + trending_topics jei reikia toliau
-  const payload = { articles: allResults, trending_topics: trendingTopics };
+  // Payload be trending_topics
+  const payload = { articles: allResults };
 
   if (allResults.length > 0) {
     try {
